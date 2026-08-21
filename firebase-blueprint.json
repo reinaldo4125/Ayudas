@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/firebase/firebase-tools/master/schema/firestore-blueprint.json",
+  "entities": {
+    "beneficiaries": {
+      "title": "Beneficiarios",
+      "description": "Censo de familias y beneficiarios de ayudas humanitarias",
+      "fields": {
+        "id": { "type": "string", "description": "Identificador único" },
+        "no": { "type": "number", "description": "Número consecutivo en censo" },
+        "nombre": { "type": "string", "description": "Nombre completo" },
+        "tipoDocumento": { "type": "string", "description": "Tipo de documento (CC, TI, CE, etc.)" },
+        "cedula": { "type": "string", "description": "Número de cédula o documento" },
+        "direccion": { "type": "string", "description": "Apartamento o dirección" },
+        "sector": { "type": "string", "description": "Sector residencial" },
+        "agrupacion": { "type": "string", "description": "Agrupación o subsector" },
+        "descripcion": { "type": "string", "description": "Descripción de ubicación" },
+        "telefono": { "type": "string", "description": "Teléfono o celular de contacto" },
+        "integrantesHogar": { "type": "number", "description": "Cantidad de personas en el hogar" },
+        "censoActualizado": { "type": "boolean", "description": "Si fue actualizado en censo reciente" },
+        "prioridadEspecial": { "type": "boolean", "description": "Si tiene prioridad especial" },
+        "vulnerabilidades": { "type": "map", "description": "Necesidades especiales (niños, adultos mayores, discapacidad)" },
+        "estadoEntrega": { "type": "string", "description": "PENDIENTE o ENTREGADO" },
+        "fechaUltimaEntrega": { "type": "string", "description": "Fecha ISO de última entrega" },
+        "observaciones": { "type": "string", "description": "Notas u observaciones" },
+        "historialEntregas": { "type": "array", "description": "Historial de entregas asociadas" },
+        "updatedAt": { "type": "string", "description": "Fecha de actualización" }
+      }
+    },
+    "inventory": {
+      "title": "Inventario",
+      "description": "Stock de insumos, mercados y ayudas humanitarias",
+      "fields": {
+        "id": { "type": "string", "description": "Identificador único" },
+        "codigo": { "type": "string", "description": "Código de insumo" },
+        "nombre": { "type": "string", "description": "Nombre del artículo" },
+        "categoria": { "type": "string", "description": "Categoría (Alimentos, Higiene, etc.)" },
+        "stockInicial": { "type": "number", "description": "Stock inicial registrado" },
+        "stockActual": { "type": "number", "description": "Stock disponible en bodega" },
+        "stockEntregado": { "type": "number", "description": "Total entregado a la comunidad" },
+        "unidadMedida": { "type": "string", "description": "Unidad (mercado, kit, unidades, etc.)" },
+        "stockMinimoAlerta": { "type": "number", "description": "Nivel de alerta stock bajo" },
+        "fechaUltimoIngreso": { "type": "string", "description": "Última fecha de reabastecimiento" },
+        "updatedAt": { "type": "string", "description": "Fecha de actualización" }
+      }
+    },
+    "deliveries": {
+      "title": "Entregas",
+      "description": "Registro y bitácora de despachos de mercados y ayudas",
+      "fields": {
+        "id": { "type": "string", "description": "Identificador único de entrega" },
+        "beneficiarioId": { "type": "string", "description": "ID del beneficiario" },
+        "beneficiarioNombre": { "type": "string", "description": "Nombre de la persona que recibe" },
+        "beneficiarioTipoDocumento": { "type": "string", "description": "Tipo de documento" },
+        "beneficiarioCedula": { "type": "string", "description": "Cédula del receptor" },
+        "beneficiarioDireccion": { "type": "string", "description": "Apartamento o dirección de entrega" },
+        "sector": { "type": "string", "description": "Sector de entrega" },
+        "agrupacion": { "type": "string", "description": "Agrupación" },
+        "fecha": { "type": "string", "description": "Fecha ISO de la entrega" },
+        "articulos": { "type": "array", "description": "Lista de artículos entregados" },
+        "responsable": { "type": "string", "description": "Voluntario o responsable que despachó" },
+        "observaciones": { "type": "string", "description": "Notas de entrega" },
+        "estado": { "type": "string", "description": "COMPLETADO o ANULADO" },
+        "createdAt": { "type": "string", "description": "Fecha de creación" }
+      }
+    }
+  }
+}

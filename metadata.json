@@ -1,0 +1,6 @@
+{
+  "name": "Ayudas Humanitarias Chiminangos",
+  "description": "Sistema de gestión de inventario, registro de beneficiarios y control en tiempo real de entregas de ayudas humanitarias.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
