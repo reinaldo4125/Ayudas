@@ -3,8 +3,10 @@ import { Search, Filter, Plus, FileDown, CheckCircle2, Clock, Eye, Edit3, Phone,
 import { Beneficiary, DeliveryRecord, HouseholdVulnerabilities } from '../types';
 import { exportBeneficiariesToCSV } from '../lib/storage';
 import { parseAptoCode } from '../lib/aptoParser';
+import { getConsolidatedApartmentMap, getApartmentCanonicalKey } from '../lib/householdUtils';
 import { parseBeneficiariesCSV, downloadCSVTemplate, CSVImportRecord } from '../lib/csvHelper';
 import { VulnerabilitiesForm } from './VulnerabilitiesForm';
+import { DeduplicateModal } from './DeduplicateModal';
 
 interface BeneficiariesViewProps {
   beneficiaries: Beneficiary[];
@@ -12,7 +14,7 @@ interface BeneficiariesViewProps {
   onEditBeneficiary: (beneficiary: Beneficiary) => void;
   onSelectBeneficiaryForDelivery: (beneficiary: Beneficiary) => void;
   onImportBulkBeneficiaries?: (items: CSVImportRecord[], replaceMode?: boolean) => void;
-  onDeduplicateBeneficiaries?: () => void;
+  onDeduplicateBeneficiaries?: (updatedList?: Beneficiary[]) => void;
   onDeleteBeneficiary?: (id: string) => void;
   onClearAllData?: () => void;
 }
@@ -37,6 +39,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
   
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showDeduplicateModal, setShowDeduplicateModal] = useState(false);
   const [viewingBeneficiary, setViewingBeneficiary] = useState<Beneficiary | null>(null);
   const [editingBeneficiary, setEditingBeneficiary] = useState<Beneficiary | null>(null);
 
@@ -70,6 +73,11 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
       if (count > 1) duplicates += (count - 1);
     });
     return duplicates;
+  }, [beneficiaries]);
+
+  // Household Consolidation Map per Apartment
+  const apartmentConsolidationMap = useMemo(() => {
+    return getConsolidatedApartmentMap(beneficiaries);
   }, [beneficiaries]);
 
   // Unique Agrupaciones
@@ -157,7 +165,10 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingBeneficiary) return;
-    onEditBeneficiary(editingBeneficiary);
+    onEditBeneficiary({
+      ...editingBeneficiary,
+      censoActualizado: true
+    });
     setEditingBeneficiary(null);
   };
 
@@ -169,7 +180,10 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
   const [csvReplacePasswordError, setCsvReplacePasswordError] = useState('');
   const [showCsvReplacePasswordModal, setShowCsvReplacePasswordModal] = useState(false);
 
-  const ADMIN_PASSWORD = 'Salome2016.';
+  const isValidAdminPassword = (pass: string) => {
+    const clean = pass.trim();
+    return clean === 'Salome2016' || clean === 'Salome2016.';
+  };
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -228,9 +242,9 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
         <div className="flex items-center gap-2 flex-wrap">
           {onDeduplicateBeneficiaries && duplicateCedulaCount > 0 && (
             <button
-              onClick={onDeduplicateBeneficiaries}
+              onClick={() => setShowDeduplicateModal(true)}
               className="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs rounded-xl shadow-md flex items-center space-x-1.5 cursor-pointer animate-pulse"
-              title="Consolidar registros que comparten el mismo número de cédula"
+              title="Consolidar y revisar registros que comparten el mismo número de cédula"
             >
               <UserCheck className="w-4 h-4" />
               <span>Unificar {duplicateCedulaCount} Duplicado(s)</span>
@@ -394,7 +408,15 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-normal">
-              {paginatedBeneficiaries.map((b) => (
+              {paginatedBeneficiaries.map((b) => {
+                const aptKey = getApartmentCanonicalKey(b.direccion, b.sector, b.id);
+                const aptInfo = apartmentConsolidationMap.get(aptKey);
+                const consolidatedCount = aptInfo ? aptInfo.integrantesConsolidados : (b.integrantesHogar || 3);
+                const registeredCount = aptInfo ? aptInfo.beneficiaries.length : 1;
+                const isPrimaryResident = !aptInfo || registeredCount === 1 || aptInfo.primaryBeneficiaryId === b.id;
+                const primaryName = aptInfo ? aptInfo.primaryBeneficiaryName : b.nombre;
+
+                return (
                 <tr key={b.id} className="hover:bg-slate-50/80 transition-colors">
                   <td className="px-4 py-3 text-center font-extrabold text-slate-400">
                     {b.no}
@@ -459,7 +481,31 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                     )}
                   </td>
                   <td className="px-4 py-3 text-center font-bold text-slate-700">
-                    {b.integrantesHogar}
+                    <div className="flex flex-col items-center justify-center">
+                      {isPrimaryResident ? (
+                        <>
+                          <span className="text-sm font-black text-slate-900">{consolidatedCount}</span>
+                          {registeredCount > 1 && (
+                            <span 
+                              className="text-[9px] font-extrabold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200 mt-0.5 whitespace-nowrap"
+                              title={`Titular del Apto (${registeredCount} personas registradas en esta vivienda)`}
+                            >
+                              Titular ({registeredCount} en apto)
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xs font-bold text-slate-400">—</span>
+                          <span 
+                            className="text-[9px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 mt-0.5 whitespace-nowrap"
+                            title={`El censo de este apartamento está registrado a nombre del titular ${primaryName}`}
+                          >
+                            Hogar: {primaryName.split(' ')[0]}
+                          </span>
+                        </>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     {b.estadoEntrega === 'ENTREGADO' ? (
@@ -522,7 +568,8 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                     </div>
                   </td>
                 </tr>
-              ))}
+              );
+            })}
 
               {filteredBeneficiaries.length === 0 && (
                 <tr>
@@ -605,14 +652,27 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
             <form onSubmit={handleAddSubmit} className="space-y-4 mt-4">
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Nombre Completo *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej. Esmilda Alegría"
-                  value={formData.nombre}
-                  onChange={e => setFormData({ ...formData, nombre: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej. Esmilda Alegría"
+                    value={formData.nombre}
+                    onFocus={e => e.target.select()}
+                    onChange={e => setFormData({ ...formData, nombre: e.target.value })}
+                    className="w-full pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  />
+                  {formData.nombre && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, nombre: '' })}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                      title="Borrar nombre"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -621,7 +681,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                   <select
                     value={formData.tipoDocumento}
                     onChange={e => setFormData({ ...formData, tipoDocumento: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="CC">C.C. - Cédula de Ciudadanía</option>
                     <option value="TI">T.I. - Tarjeta de Identidad</option>
@@ -633,14 +693,27 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1">Número de Documento *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. 1130608151 o S/N"
-                    value={formData.cedula}
-                    onChange={e => setFormData({ ...formData, cedula: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 1130608151 o S/N"
+                      value={formData.cedula}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setFormData({ ...formData, cedula: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {formData.cedula && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, cedula: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar documento"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -659,7 +732,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                         descripcion: parsed.descripcion
                       });
                     }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="Sector 1">Sector 1</option>
                     <option value="Sector 2">Sector 2</option>
@@ -674,14 +747,27 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Dirección / Apto *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. 4B42 o 2C15"
-                    value={formData.direccion}
-                    onChange={e => handleDireccionChange(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 4B42 o 2C15"
+                      value={formData.direccion}
+                      onFocus={e => e.target.select()}
+                      onChange={e => handleDireccionChange(e.target.value)}
+                      className="w-full pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {formData.direccion && (
+                      <button
+                        type="button"
+                        onClick={() => handleDireccionChange('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar dirección"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -689,7 +775,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                   <select
                     value={formData.agrupacion}
                     onChange={e => setFormData({ ...formData, agrupacion: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="Agrupación 1">Agrupación 1</option>
                     <option value="Agrupación 2">Agrupación 2</option>
@@ -716,27 +802,96 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Teléfono Móvil</label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 3160899305"
-                    value={formData.telefono}
-                    onChange={e => setFormData({ ...formData, telefono: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Ej. 3160899305"
+                      value={formData.telefono}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setFormData({ ...formData, telefono: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {formData.telefono && (
+                      <button
+                        type="button"
+                        onClick={() => setFormData({ ...formData, telefono: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar teléfono"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Integrantes Hogar</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={formData.integrantesHogar}
-                    onChange={e => setFormData({ ...formData, integrantesHogar: parseInt(e.target.value) || 1 })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
-                  />
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800">
+                      👥 Integrantes Hogar:
+                    </label>
+                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-2.5 py-0.5 rounded-lg border border-emerald-200">
+                      {formData.integrantesHogar || 1} personas
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, integrantesHogar: Math.max(1, (prev.integrantesHogar || 1) - 1) }))}
+                        className="w-10 h-10 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        -
+                      </button>
+
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={25}
+                        value={formData.integrantesHogar || ''}
+                        onFocus={e => e.target.select()}
+                        onChange={e => {
+                          const val = e.target.value === '' ? '' : parseInt(e.target.value);
+                          setFormData({ ...formData, integrantesHogar: val as any });
+                        }}
+                        onBlur={() => {
+                          if (!formData.integrantesHogar || formData.integrantesHogar < 1) {
+                            setFormData({ ...formData, integrantesHogar: 1 });
+                          }
+                        }}
+                        className="w-16 h-10 text-center bg-white border-2 border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setFormData(prev => ({ ...prev, integrantesHogar: Math.min(25, (prev.integrantesHogar || 1) + 1) }))}
+                        className="w-10 h-10 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <div className="flex gap-1 overflow-x-auto">
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, integrantesHogar: num })}
+                          className={`w-8 h-9 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                            formData.integrantesHogar === num
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -965,14 +1120,27 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
 
             <form onSubmit={handleEditSubmit} className="space-y-3 mt-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre Completo</label>
-                <input
-                  type="text"
-                  required
-                  value={editingBeneficiary.nombre}
-                  onChange={e => setEditingBeneficiary({ ...editingBeneficiary, nombre: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900"
-                />
+                <label className="block text-xs font-bold text-slate-700 mb-1">Nombre Completo *</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={editingBeneficiary.nombre}
+                    onFocus={e => e.target.select()}
+                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, nombre: e.target.value })}
+                    className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  />
+                  {editingBeneficiary.nombre && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingBeneficiary({ ...editingBeneficiary, nombre: '' })}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                      title="Borrar nombre"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -981,7 +1149,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                   <select
                     value={editingBeneficiary.tipoDocumento || 'CC'}
                     onChange={e => setEditingBeneficiary({ ...editingBeneficiary, tipoDocumento: e.target.value })}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="CC">C.C.</option>
                     <option value="TI">T.I.</option>
@@ -993,13 +1161,26 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1">Número de Documento *</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingBeneficiary.cedula}
-                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, cedula: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      value={editingBeneficiary.cedula}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setEditingBeneficiary({ ...editingBeneficiary, cedula: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.cedula && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, cedula: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar documento"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1019,7 +1200,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                         descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : editingBeneficiary.direccion)
                       });
                     }}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="Sector 1">Sector 1</option>
                     <option value="Sector 2">Sector 2</option>
@@ -1033,52 +1214,147 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Dirección / Apto *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. 2C15 o 4B42 o Usuario Externo"
-                    value={editingBeneficiary.direccion}
-                    onChange={e => {
-                      const newDir = e.target.value;
-                      const parsed = parseAptoCode(newDir, editingBeneficiary.sector);
-                      const isExt = newDir.toLowerCase().includes('externo') || newDir.toLowerCase().includes('fuera') || (editingBeneficiary.sector || '').toLowerCase().includes('externo');
-                      setEditingBeneficiary({
-                        ...editingBeneficiary,
-                        direccion: newDir,
-                        agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : editingBeneficiary.agrupacion),
-                        descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : newDir)
-                      });
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 2C15 o 4B42 o Usuario Externo"
+                      value={editingBeneficiary.direccion}
+                      onFocus={e => e.target.select()}
+                      onChange={e => {
+                        const newDir = e.target.value;
+                        const parsed = parseAptoCode(newDir, editingBeneficiary.sector);
+                        const isExt = newDir.toLowerCase().includes('externo') || newDir.toLowerCase().includes('fuera') || (editingBeneficiary.sector || '').toLowerCase().includes('externo');
+                        setEditingBeneficiary({
+                          ...editingBeneficiary,
+                          direccion: newDir,
+                          agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : editingBeneficiary.agrupacion),
+                          descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : newDir)
+                        });
+                      }}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.direccion && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, direccion: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar dirección"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Teléfono</label>
-                  <input
-                    type="text"
-                    value={editingBeneficiary.telefono}
-                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, telefono: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={editingBeneficiary.telefono}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setEditingBeneficiary({ ...editingBeneficiary, telefono: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.telefono && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, telefono: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar teléfono"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Agrupación</label>
-                <select
-                  value={editingBeneficiary.agrupacion}
-                  onChange={e => setEditingBeneficiary({ ...editingBeneficiary, agrupacion: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
-                >
-                  <option value="Agrupación 1">Agrupación 1</option>
-                  <option value="Agrupación 2">Agrupación 2</option>
-                  <option value="Agrupación 3">Agrupación 3</option>
-                  <option value="Agrupación 4">Agrupación 4</option>
-                  <option value="Agrupación 5">Agrupación 5</option>
-                  <option value="Torres y Aptos">Torres y Aptos</option>
-                  <option value="Sector General">Sector General</option>
-                  <option value="Usuarios Externos">Usuarios Externos</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Agrupación</label>
+                  <select
+                    value={editingBeneficiary.agrupacion}
+                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, agrupacion: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  >
+                    <option value="Agrupación 1">Agrupación 1</option>
+                    <option value="Agrupación 2">Agrupación 2</option>
+                    <option value="Agrupación 3">Agrupación 3</option>
+                    <option value="Agrupación 4">Agrupación 4</option>
+                    <option value="Agrupación 5">Agrupación 5</option>
+                    <option value="Torres y Aptos">Torres y Aptos</option>
+                    <option value="Sector General">Sector General</option>
+                    <option value="Usuarios Externos">Usuarios Externos</option>
+                  </select>
+                </div>
+
+                <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800">
+                      👥 Integrantes Hogar: *
+                    </label>
+                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
+                      {editingBeneficiary.integrantesHogar || 1} personas
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary(prev => prev ? ({ ...prev, integrantesHogar: Math.max(1, (prev.integrantesHogar || 1) - 1) }) : null)}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        -
+                      </button>
+
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={25}
+                        value={editingBeneficiary.integrantesHogar || ''}
+                        onFocus={e => e.target.select()}
+                        onChange={e => {
+                          const val = e.target.value === '' ? '' : parseInt(e.target.value);
+                          setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: val as any });
+                        }}
+                        onBlur={() => {
+                          if (!editingBeneficiary.integrantesHogar || editingBeneficiary.integrantesHogar < 1) {
+                            setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: 1 });
+                          }
+                        }}
+                        className="w-14 h-9 text-center bg-white border-2 border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary(prev => prev ? ({ ...prev, integrantesHogar: Math.min(25, (prev.integrantesHogar || 1) + 1) }) : null)}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <div className="flex gap-1 overflow-x-auto">
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: num })}
+                          className={`w-7 h-9 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                            editingBeneficiary.integrantesHogar === num
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <VulnerabilitiesForm
@@ -1206,7 +1482,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (csvReplacePassword !== ADMIN_PASSWORD) {
+                if (!isValidAdminPassword(csvReplacePassword)) {
                   setCsvReplacePasswordError('Contraseña incorrecta. Acción no autorizada.');
                   return;
                 }
@@ -1292,7 +1568,7 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                if (clearPassword !== ADMIN_PASSWORD) {
+                if (!isValidAdminPassword(clearPassword)) {
                   setClearPasswordError('Contraseña incorrecta. Acción no autorizada.');
                   return;
                 }
@@ -1356,6 +1632,18 @@ export const BeneficiariesView: React.FC<BeneficiariesViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Deduplicate Preview & Merge Modal */}
+      <DeduplicateModal
+        isOpen={showDeduplicateModal}
+        onClose={() => setShowDeduplicateModal(false)}
+        beneficiaries={beneficiaries}
+        onConfirmDeduplication={(finalList) => {
+          if (onDeduplicateBeneficiaries) {
+            onDeduplicateBeneficiaries(finalList);
+          }
+        }}
+      />
     </div>
   );
 };

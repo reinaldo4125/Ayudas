@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669" />
+      <stop offset="100%" stop-color="#10b981" />
+    </linearGradient>
+  </defs>
+  <!-- Rounded tile -->
+  <rect x="5" y="5" width="90" height="90" rx="22" fill="url(#bg)" />
+  
+  <!-- Heart icon -->
+  <path d="M 50 28 C 42 16 26 16 18 27 C 10 38 16 54 50 78 C 84 54 90 38 82 27 C 74 16 58 16 50 28 Z" fill="#ffffff" />
+  
+  <!-- Hands joining gesture inside heart -->
+  <path d="M 37 45 C 39 42 43 42 45 45 L 50 50 L 55 45 C 57 42 61 42 63 45 C 65 47 65 51 63 53 L 52 64 C 51 65 49 65 48 64 L 37 53 C 35 51 35 47 37 45 Z" fill="#059669" />
+</svg>

@@ -12,7 +12,9 @@ import { DeliveryModal } from './components/DeliveryModal';
 import { ReportsView } from './components/ReportsView';
 import { AIAssistantModal } from './components/AIAssistantModal';
 import { SimpleMarketDeliveryView } from './components/SimpleMarketDeliveryView';
-import { Beneficiary, InventoryItem, DeliveryRecord } from './types';
+import { DevPanelModal } from './components/DevPanelModal';
+import { OwnersView } from './components/OwnersView';
+import { Beneficiary, InventoryItem, DeliveryRecord, PropertyRecord } from './types';
 import {
   getStoredBeneficiaries,
   saveBeneficiaries,
@@ -21,18 +23,24 @@ import {
   getStoredDeliveries,
   saveDeliveries,
   calculateSummaryStats,
-  clearBeneficiariesAndDeliveries
+  clearBeneficiariesAndDeliveries,
+  getStoredProperties,
+  saveProperties
 } from './lib/storage';
 import {
   initializeFirestoreDatabase,
   subscribeToBeneficiaries,
   subscribeToInventory,
   subscribeToDeliveries,
+  subscribeToProperties,
   syncBeneficiaryToCloud,
   deleteBeneficiaryFromCloud,
   syncInventoryItemToCloud,
+  deleteInventoryItemFromCloud,
   syncDeliveryToCloud,
   deleteDeliveryFromCloud,
+  syncPropertyToCloud,
+  bulkSavePropertiesToCloud,
   bulkSaveBeneficiariesToCloud,
   bulkSaveInventoryToCloud,
   bulkSaveDeliveriesToCloud,
@@ -41,17 +49,20 @@ import {
   clearAllCloudBeneficiariesAndDeliveries
 } from './lib/firestoreService';
 import { CheckCircle2, HeartHandshake } from 'lucide-react';
+import { MultinyectoresLogo } from './components/MultinyectoresLogo';
 
 import { CSVImportRecord, parseCSVDate } from './lib/csvHelper';
 import { parseAptoCode } from './lib/aptoParser';
+import { getApartmentCanonicalKey } from './lib/householdUtils';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'simple' | 'dashboard' | 'beneficiaries' | 'inventory' | 'reports' | 'ai'>('simple');
+  const [activeTab, setActiveTab] = useState<'simple' | 'dashboard' | 'owners' | 'beneficiaries' | 'inventory' | 'reports' | 'ai'>('simple');
 
   // Application State
   const [beneficiaries, setBeneficiaries] = useState<Beneficiary[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [deliveries, setDeliveries] = useState<DeliveryRecord[]>([]);
+  const [properties, setProperties] = useState<PropertyRecord[]>([]);
   const [isCloudSynced, setIsCloudSynced] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
@@ -59,25 +70,33 @@ export default function App() {
   const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
   const [preSelectedBeneficiary, setPreSelectedBeneficiary] = useState<Beneficiary | null>(null);
 
+  // Dev Panel Modal State
+  const [isDevPanelOpen, setIsDevPanelOpen] = useState(false);
+
   // Success Notification Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Initialize data on mount
   useEffect(() => {
+    document.title = 'Ayudas Humanitarias Chiminangos';
+
     // 1. Initial immediate local cache load
     const loadedBens = getStoredBeneficiaries();
     const loadedDels = getStoredDeliveries();
     const loadedInv = getStoredInventory();
+    const loadedProps = getStoredProperties(loadedBens);
 
     setBeneficiaries(loadedBens);
     setDeliveries(loadedDels);
     setInventory(loadedInv);
+    setProperties(loadedProps);
 
     // 2. Connect & synchronize with Cloud Firestore
     setIsSyncing(true);
     let unsubBens: (() => void) | undefined;
     let unsubInv: (() => void) | undefined;
     let unsubDels: (() => void) | undefined;
+    let unsubProps: (() => void) | undefined;
 
     initializeFirestoreDatabase()
       .then((initialData) => {
@@ -118,6 +137,15 @@ export default function App() {
           },
           () => setIsCloudSynced(false)
         );
+
+        unsubProps = subscribeToProperties(
+          (data) => {
+            if (data.length > 0) {
+              setProperties(data);
+            }
+          },
+          () => setIsCloudSynced(false)
+        );
       })
       .catch((err) => {
         console.warn('Firestore init fallback to local storage:', err);
@@ -129,6 +157,7 @@ export default function App() {
       if (unsubBens) unsubBens();
       if (unsubInv) unsubInv();
       if (unsubDels) unsubDels();
+      if (unsubProps) unsubProps();
     };
   }, []);
 
@@ -175,7 +204,20 @@ export default function App() {
     showToast(`Beneficiario ${target ? target.nombre : ''} eliminado.`);
   };
 
-  const handleDeduplicateBeneficiaries = () => {
+  const handleDeduplicateBeneficiaries = async (updatedList?: Beneficiary[]) => {
+    if (updatedList) {
+      setBeneficiaries(updatedList);
+      saveBeneficiaries(updatedList);
+      try {
+        await bulkReplaceBeneficiariesInCloud(updatedList);
+        showToast('¡Registros duplicados unificados y eliminados de la nube exitosamente!');
+      } catch (err) {
+        console.error('Error al reemplazar beneficiarios duplicados en la nube:', err);
+        showToast('Unificados localmente, pero hubo un error al sincronizar en la nube.');
+      }
+      return;
+    }
+
     const groups = new Map<string, Beneficiary[]>();
     const nonCedulaList: Beneficiary[] = [];
 
@@ -234,10 +276,15 @@ export default function App() {
     const finalList = [...consolidated, ...nonCedulaList].sort((a, b) => a.no - b.no);
     setBeneficiaries(finalList);
     saveBeneficiaries(finalList);
-    bulkSaveBeneficiariesToCloud(finalList);
 
     if (duplicatesFound > 0) {
-      showToast(`¡Depuración completada! Se unificaron ${duplicatesFound} registro(s) duplicados y se actualizaron en la nube.`);
+      try {
+        await bulkReplaceBeneficiariesInCloud(finalList);
+        showToast(`¡Depuración completada! Se unificaron ${duplicatesFound} registro(s) duplicados y se eliminaron de la nube.`);
+      } catch (err) {
+        console.error('Error al depurar duplicados en la nube:', err);
+        showToast(`Se unificaron ${duplicatesFound} duplicado(s) localmente, error al limpiar en la nube.`);
+      }
     } else {
       showToast('No se encontraron beneficiarios duplicados por cédula.');
     }
@@ -516,7 +563,28 @@ export default function App() {
       descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : (edited.descripcion || edited.direccion))
     };
 
-    const updatedBeneficiaries = beneficiaries.map(b => b.id === edited.id ? fullyUpdated : b);
+    const targetAptKey = getApartmentCanonicalKey(fullyUpdated.direccion, fullyUpdated.sector, fullyUpdated.id);
+
+    const updatedBeneficiaries = beneficiaries.map(b => {
+      if (b.id === edited.id) {
+        return fullyUpdated;
+      }
+      // If same non-external apartment, sync household member count and census status
+      if (!isExt && targetAptKey !== 'sin-direccion') {
+        const otherAptKey = getApartmentCanonicalKey(b.direccion, b.sector, b.id);
+        if (otherAptKey === targetAptKey) {
+          const synced: Beneficiary = {
+            ...b,
+            integrantesHogar: fullyUpdated.integrantesHogar,
+            censoActualizado: true
+          };
+          syncBeneficiaryToCloud(synced);
+          return synced;
+        }
+      }
+      return b;
+    });
+
     setBeneficiaries(updatedBeneficiaries);
     saveBeneficiaries(updatedBeneficiaries);
     syncBeneficiaryToCloud(fullyUpdated);
@@ -563,9 +631,10 @@ export default function App() {
     let updatedItemObj: InventoryItem | undefined;
     const updated = inventory.map(item => {
       if (item.id === itemId) {
+        const newStock = Math.max(0, item.stockActual + addQuantity);
         const up = {
           ...item,
-          stockActual: item.stockActual + addQuantity,
+          stockActual: newStock,
           fechaUltimoIngreso: new Date().toISOString()
         };
         updatedItemObj = up;
@@ -579,7 +648,25 @@ export default function App() {
     if (updatedItemObj) {
       syncInventoryItemToCloud(updatedItemObj);
     }
-    showToast(`Stock reabastecido en +${addQuantity} unidades y sincronizado.`);
+    const actionText = addQuantity >= 0 ? `Stock actualizado (+${addQuantity})` : `Stock ajustado/reducido (${addQuantity})`;
+    showToast(`${actionText} y sincronizado con la nube.`);
+  };
+
+  const handleEditInventoryItem = (editedItem: InventoryItem) => {
+    const updated = inventory.map(item => item.id === editedItem.id ? editedItem : item);
+    setInventory(updated);
+    saveInventory(updated);
+    syncInventoryItemToCloud(editedItem);
+    showToast(`Insumo "${editedItem.nombre}" actualizado con éxito en la nube.`);
+  };
+
+  const handleDeleteInventoryItem = (itemId: string) => {
+    const target = inventory.find(i => i.id === itemId);
+    const updated = inventory.filter(item => item.id !== itemId);
+    setInventory(updated);
+    saveInventory(updated);
+    deleteInventoryItemFromCloud(itemId);
+    showToast(`Insumo "${target?.nombre || 'Insumo'}" eliminado de la bodega.`);
   };
 
   const handleConfirmDelivery = (deliveryData: Omit<DeliveryRecord, 'id'>) => {
@@ -610,8 +697,11 @@ export default function App() {
     const updatedBeneficiaries = beneficiaries.map(b => {
       if (b.id === deliveryData.beneficiarioId) {
         const history = b.historialEntregas || [];
-        const up = {
+        const confirmedMembers = deliveryData.integrantesHogar || b.integrantesHogar || 1;
+        const up: Beneficiary = {
           ...b,
+          integrantesHogar: confirmedMembers,
+          censoActualizado: true,
           estadoEntrega: 'ENTREGADO' as const,
           fechaUltimaEntrega: newDelivery.fecha,
           historialEntregas: [newDelivery, ...history]
@@ -740,6 +830,21 @@ export default function App() {
     setIsDeliveryModalOpen(true);
   };
 
+  const handleUpdateProperty = async (updated: PropertyRecord) => {
+    const nextList = properties.map(p => p.id === updated.id ? updated : p);
+    setProperties(nextList);
+    saveProperties(nextList);
+    await syncPropertyToCloud(updated);
+    showToast(`Apartamento ${updated.aptoCode} actualizado en el Censo de Propietarios.`);
+  };
+
+  const handleBulkUpdateProperties = async (list: PropertyRecord[]) => {
+    setProperties(list);
+    saveProperties(list);
+    await bulkSavePropertiesToCloud(list);
+    showToast(`Censo masivo de 600 apartamentos actualizado en la nube.`);
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans antialiased flex flex-col">
       {/* Top Header */}
@@ -753,6 +858,7 @@ export default function App() {
           setPreSelectedBeneficiary(null);
           setIsDeliveryModalOpen(true);
         }}
+        onOpenDevPanel={() => setIsDevPanelOpen(true)}
       />
 
       {/* Main Container */}
@@ -767,6 +873,16 @@ export default function App() {
             onEditBeneficiary={handleEditBeneficiary}
             onImportBulkBeneficiaries={handleImportBulkBeneficiaries}
             onClearAllData={handleClearAllData}
+          />
+        )}
+
+        {activeTab === 'owners' && (
+          <OwnersView
+            properties={properties}
+            onUpdateProperty={handleUpdateProperty}
+            onBulkUpdateProperties={handleBulkUpdateProperties}
+            beneficiaries={beneficiaries}
+            onOpenDevPanel={() => setIsDevPanelOpen(true)}
           />
         )}
 
@@ -803,6 +919,8 @@ export default function App() {
             inventory={inventory}
             onAddInventoryItem={handleAddInventoryItem}
             onUpdateStock={handleUpdateStock}
+            onEditInventoryItem={handleEditInventoryItem}
+            onDeleteInventoryItem={handleDeleteInventoryItem}
           />
         )}
 
@@ -838,6 +956,16 @@ export default function App() {
         onConfirmDelivery={handleConfirmDelivery}
       />
 
+      {/* Developer Maintenance Modal */}
+      <DevPanelModal
+        isOpen={isDevPanelOpen}
+        onClose={() => setIsDevPanelOpen(false)}
+        onClearAllData={handleClearAllData}
+        totalBeneficiarios={beneficiaries.length}
+        totalDeliveries={deliveries.length}
+        totalProperties={properties.length}
+      />
+
       {/* Notification Toast */}
       {toastMessage && (
         <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-md z-50 bg-slate-900 text-white px-4 sm:px-5 py-3 sm:py-3.5 rounded-2xl shadow-2xl border border-emerald-500/40 flex items-center space-x-3 text-xs sm:text-sm font-semibold animate-bounce">
@@ -848,31 +976,52 @@ export default function App() {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="bg-slate-900 text-slate-400 py-6 text-center text-xs border-t border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="text-center sm:text-left">
-            <p className="font-semibold text-slate-300">
-              Sistema de Control de Inventario y Entregas Humanitarias • Chiminangos
-            </p>
-            <p className="text-slate-500 mt-0.5">
-              Base de datos censada: {beneficiaries.length} familias registradas • Monitoreo en tiempo real
-            </p>
+      {/* Footer & Sponsors */}
+      <footer className="bg-slate-900 text-slate-400 py-8 text-xs border-t border-slate-800">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+          {/* Official Sponsor Showcase Card */}
+          <div className="bg-slate-800/80 rounded-2xl border border-slate-700/80 p-4 sm:p-5 flex flex-col md:flex-row items-center justify-between gap-4 shadow-xl">
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-3.5 text-center sm:text-left">
+              <div className="p-2.5 bg-sky-500/10 border border-sky-500/20 rounded-2xl text-sky-400 shrink-0">
+                <HeartHandshake className="w-6 h-6 text-sky-400" />
+              </div>
+              <div>
+                <p className="text-slate-300 text-xs max-w-xl">
+                  Agradecimiento especial a <strong className="text-white">Multinyectores Colombia</strong> por apoyar el bienestar, la gestión comunitaria y el desarrollo tecnológico del programa de Ayudas Humanitarias Chiminangos.
+                </p>
+              </div>
+            </div>
+
+            <div className="shrink-0">
+              <MultinyectoresLogo variant="dark" />
+            </div>
           </div>
 
-          <div className="flex items-center space-x-2 text-slate-400">
-            <span>Desarrollado por</span>
-            <a
-              href="https://www.linkedin.com/in/reinaldo-duran-castro"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 font-medium text-emerald-400 hover:text-emerald-300 transition-colors underline underline-offset-4"
-            >
-              <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
-                <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>
-              </svg>
-              Reinaldo Durán Castro
-            </a>
+          {/* Bottom Info Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-800/80">
+            <div className="text-center sm:text-left">
+              <p className="font-semibold text-slate-300">
+                Sistema de Control de Inventario y Entregas Humanitarias • Chiminangos
+              </p>
+              <p className="text-slate-500 mt-0.5">
+                Base de datos censada: {beneficiaries.length} familias registradas • Monitoreo en tiempo real
+              </p>
+            </div>
+
+            <div className="flex items-center space-x-2 text-slate-400">
+              <span>Desarrollado por</span>
+              <a
+                href="https://www.linkedin.com/in/reinaldo-duran-castro"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 font-medium text-emerald-400 hover:text-emerald-300 transition-colors underline underline-offset-4"
+              >
+                <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                  <path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/>
+                </svg>
+                Reinaldo Durán Castro
+              </a>
+            </div>
           </div>
         </div>
       </footer>

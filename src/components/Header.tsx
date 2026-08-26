@@ -1,14 +1,16 @@
 import React from 'react';
-import { Package, Users, BarChart3, Bot, FileCheck, HeartHandshake, AlertTriangle, Cloud, RefreshCw } from 'lucide-react';
+import { Package, Users, BarChart3, Bot, FileCheck, HeartHandshake, AlertTriangle, Cloud, RefreshCw, Database, Lock, Building2 } from 'lucide-react';
 import { SummaryStats } from '../types';
+import { isDevEnvironment } from '../lib/firestoreService';
 
 interface HeaderProps {
-  activeTab: 'simple' | 'dashboard' | 'beneficiaries' | 'inventory' | 'reports' | 'ai';
-  setActiveTab: (tab: 'simple' | 'dashboard' | 'beneficiaries' | 'inventory' | 'reports' | 'ai') => void;
+  activeTab: 'simple' | 'dashboard' | 'owners' | 'beneficiaries' | 'inventory' | 'reports' | 'ai';
+  setActiveTab: (tab: 'simple' | 'dashboard' | 'owners' | 'beneficiaries' | 'inventory' | 'reports' | 'ai') => void;
   stats: SummaryStats;
   onOpenNewDelivery: () => void;
   isCloudSynced?: boolean;
   isSyncing?: boolean;
+  onOpenDevPanel?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,8 +19,11 @@ export const Header: React.FC<HeaderProps> = ({
   stats,
   onOpenNewDelivery,
   isCloudSynced = true,
-  isSyncing = false
+  isSyncing = false,
+  onOpenDevPanel
 }) => {
+  const isDev = isDevEnvironment();
+
   return (
     <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-30 shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -33,10 +38,19 @@ export const Header: React.FC<HeaderProps> = ({
                 <h1 className="text-xl font-bold tracking-tight text-white">
                   Ayudas Humanitarias Chiminangos
                 </h1>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                  <span>En Vivo</span>
-                </span>
+
+                {/* Environment Badge */}
+                {isDev ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40" title="Entorno de Desarrollo Aislado (dev_collections)">
+                    <Database className="w-3 h-3 text-purple-400" />
+                    <span>🧪 DESARROLLO (Aislado)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40" title="Entorno Oficial de Producción">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                    <span>🚀 PRODUCCIÓN</span>
+                  </span>
+                )}
                 
                 {/* Cloud Sync Indicator */}
                 <div
@@ -66,9 +80,20 @@ export const Header: React.FC<HeaderProps> = ({
                     </>
                   )}
                 </div>
+
+                {onOpenDevPanel && (
+                  <button
+                    onClick={onOpenDevPanel}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-purple-500/50 transition-colors cursor-pointer"
+                    title="Panel de Mantenimiento de BD (Protegido con contraseña Salome2016)"
+                  >
+                    <Lock className="w-3 h-3 text-purple-400" />
+                    <span>Panel Dev</span>
+                  </button>
+                )}
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Censo Oficial Chiminangos • Base de Datos en la Nube & Control de Entregas
+                Censo Oficial Chiminangos • Base de Datos en la Nube {isDev ? '(Entorno Pruebas Dev)' : '(Base Oficial)'}
               </p>
             </div>
           </div>
@@ -130,6 +155,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <BarChart3 className="w-4 h-4" />
             <span>Panel Resumen</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('owners')}
+            className={`flex items-center space-x-2 px-4 py-2.5 rounded-t-lg text-xs sm:text-sm font-medium transition-colors cursor-pointer whitespace-nowrap ${
+              activeTab === 'owners'
+                ? 'bg-indigo-900/80 text-indigo-300 border-b-2 border-indigo-400 shadow'
+                : 'text-indigo-400/90 hover:text-indigo-200 hover:bg-indigo-950/40'
+            }`}
+          >
+            <Building2 className="w-4 h-4 text-indigo-400" />
+            <span>🏢 Propietarios (Censo)</span>
           </button>
 
           <button

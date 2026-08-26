@@ -35,6 +35,7 @@ import { Beneficiary, DeliveryRecord, HouseholdVulnerabilities } from '../types'
 import { parseBeneficiariesCSV, downloadCSVTemplate } from '../lib/csvHelper';
 import { parseAptoCode } from '../lib/aptoParser';
 import { VulnerabilitiesForm } from './VulnerabilitiesForm';
+import { formatDateToYMD, isDeliveryInDateRange, formatDisplayDateTime } from '../lib/dateUtils';
 
 interface SimpleMarketDeliveryViewProps {
   beneficiaries: Beneficiary[];
@@ -69,7 +70,9 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
   onClearAllData
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'SECTOR' | 'EXTERNAL' | 'PENDING' | 'DELIVERED' | 'MULTIPLE'>('ALL');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'SECTOR' | 'EXTERNAL' | 'PENDING' | 'DELIVERED' | 'TODAY' | 'DATE_RANGE' | 'MULTIPLE'>('ALL');
+  const [customDeliveryStartDate, setCustomDeliveryStartDate] = useState<string>('');
+  const [customDeliveryEndDate, setCustomDeliveryEndDate] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
   
@@ -106,6 +109,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
   const [newCedula, setNewCedula] = useState('');
   const [newTelefono, setNewTelefono] = useState('');
   const [newAgrupacion, setNewAgrupacion] = useState('Agrupación 1');
+  const [newIntegrantesHogar, setNewIntegrantesHogar] = useState<number>(3);
 
   // Group beneficiaries into unique Apartment Groups or Individual External Cards
   const apartmentGroups = useMemo(() => {
@@ -162,6 +166,8 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
     return Array.from(groupsMap.values());
   }, [beneficiaries, deliveries]);
 
+  const todayStr = useMemo(() => formatDateToYMD(new Date()), []);
+
   // Group or filter apartment groups by search query and status
   const filteredApartmentGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -179,6 +185,16 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
       if (filterStatus === 'DELIVERED' && !hasDeliveries) return false;
       if (filterStatus === 'MULTIPLE' && deliveryCount < 2) return false;
 
+      // Date filters
+      if (filterStatus === 'TODAY') {
+        const hasTodayDelivery = group.deliveries.some(d => isDeliveryInDateRange(d.fecha, todayStr, todayStr));
+        if (!hasTodayDelivery) return false;
+      }
+      if (filterStatus === 'DATE_RANGE') {
+        const hasRangeDelivery = group.deliveries.some(d => isDeliveryInDateRange(d.fecha, customDeliveryStartDate, customDeliveryEndDate));
+        if (!hasRangeDelivery) return false;
+      }
+
       // Search match by Apt/Dirección, Descripcion, Resident Name, Cédula, Teléfono, ITEM #
       if (!q) return true;
 
@@ -193,7 +209,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
 
       return aptMatch || residentMatch;
     });
-  }, [apartmentGroups, searchQuery, filterStatus]);
+  }, [apartmentGroups, searchQuery, filterStatus, todayStr, customDeliveryStartDate, customDeliveryEndDate]);
 
   // Total pages and sliced paginated items
   const totalPages = Math.max(1, Math.ceil(filteredApartmentGroups.length / pageSize));
@@ -214,6 +230,15 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
   const totalPendingApartmentsCount = totalApartmentsCount - totalDeliveredApartmentsCount;
   const multipleDeliveriesApartmentsCount = apartmentGroups.filter(g => g.deliveries.length > 1).length;
   const totalDeliveriesMade = deliveries.length;
+
+  // Deliveries made today
+  const deliveriesTodayCount = useMemo(() => {
+    return deliveries.filter(d => isDeliveryInDateRange(d.fecha, todayStr, todayStr)).length;
+  }, [deliveries, todayStr]);
+
+  const apartmentsDeliveredTodayCount = useMemo(() => {
+    return apartmentGroups.filter(g => g.deliveries.some(d => isDeliveryInDateRange(d.fecha, todayStr, todayStr))).length;
+  }, [apartmentGroups, todayStr]);
 
   const [pendingCSVData, setPendingCSVData] = useState<any[] | null>(null);
   const [showClearModal, setShowClearModal] = useState(false);
@@ -368,7 +393,9 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
       ],
       responsable: responsableInput.trim() || 'Voluntario Chiminangos',
       observaciones: observacionesInput.trim(),
-      estado: 'COMPLETADO'
+      estado: 'COMPLETADO',
+      integrantesHogar: validatedMembersCount,
+      censoActualizado: true
     });
 
     // Reset modal state
@@ -399,7 +426,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
       sector: selectedSector,
       agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : newAgrupacion),
       descripcion: isExt ? 'Usuario Externo al Sector' : parsed.descripcion,
-      integrantesHogar: 1,
+      integrantesHogar: newIntegrantesHogar || 1,
       prioridadEspecial: false
     });
 
@@ -410,6 +437,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
     setNewCedula('');
     setNewTelefono('');
     setNewAgrupacion('Agrupación 1');
+    setNewIntegrantesHogar(3);
     setIsAddModalOpen(false);
   };
 
@@ -618,10 +646,48 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
             >
               Múltiples Mercados (2+) ({multipleDeliveriesApartmentsCount})
             </button>
+
+            <button
+              onClick={() => {
+                setFilterStatus(filterStatus === 'TODAY' ? 'ALL' : 'TODAY');
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-colors cursor-pointer border flex items-center space-x-1.5 ${
+                filterStatus === 'TODAY'
+                  ? 'bg-cyan-600 text-white border-cyan-400 shadow-md shadow-cyan-950/50'
+                  : 'bg-slate-800 text-cyan-300 border-cyan-500/30 hover:bg-cyan-950/50'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Entregados Hoy ({apartmentsDeliveredTodayCount})</span>
+            </button>
+
+            <button
+              onClick={() => {
+                if (filterStatus === 'DATE_RANGE') {
+                  setFilterStatus('ALL');
+                } else {
+                  setFilterStatus('DATE_RANGE');
+                  if (!customDeliveryStartDate) setCustomDeliveryStartDate(todayStr);
+                  if (!customDeliveryEndDate) setCustomDeliveryEndDate(todayStr);
+                }
+                setCurrentPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-xl font-bold transition-colors cursor-pointer border flex items-center space-x-1.5 ${
+                filterStatus === 'DATE_RANGE'
+                  ? 'bg-indigo-600 text-white border-indigo-400 shadow-md shadow-indigo-950/50'
+                  : 'bg-slate-800 text-indigo-300 border-indigo-500/30 hover:bg-indigo-950/50'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Filtrar por Rango de Fechas</span>
+            </button>
           </div>
 
           <div className="text-slate-300 font-medium text-[11px] bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center gap-2">
             <span><strong>{totalDeliveriesMade}</strong> Mercados Entregados</span>
+            <span className="text-slate-500">•</span>
+            <span><strong>{deliveriesTodayCount}</strong> Hoy</span>
             <span className="text-slate-500">•</span>
             <span><strong>{totalApartmentsCount}</strong> Viviendas Únicas</span>
             {multipleDeliveriesApartmentsCount > 0 && (
@@ -632,6 +698,54 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
             )}
           </div>
         </div>
+
+        {/* Date range picker bar if DATE_RANGE active */}
+        {filterStatus === 'DATE_RANGE' && (
+          <div className="mt-3 pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-3 bg-slate-950/60 p-3 rounded-xl border border-indigo-500/30 text-white">
+            <div className="flex items-center space-x-2 text-indigo-400 font-bold text-xs">
+              <Calendar className="w-4 h-4" />
+              <span>Seleccionar Período de Entregas:</span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <label className="text-[11px] text-slate-400 font-medium">Desde:</label>
+              <input
+                type="date"
+                value={customDeliveryStartDate}
+                onChange={e => {
+                  setCustomDeliveryStartDate(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="px-2.5 py-1 bg-slate-800 text-white border border-slate-700 rounded-lg text-xs font-mono focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <label className="text-[11px] text-slate-400 font-medium">Hasta:</label>
+              <input
+                type="date"
+                value={customDeliveryEndDate}
+                onChange={e => {
+                  setCustomDeliveryEndDate(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="px-2.5 py-1 bg-slate-800 text-white border border-slate-700 rounded-lg text-xs font-mono focus:outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <button
+              onClick={() => {
+                setCustomDeliveryStartDate('');
+                setCustomDeliveryEndDate('');
+                setFilterStatus('ALL');
+                setCurrentPage(1);
+              }}
+              className="text-xs text-indigo-300 hover:text-white underline cursor-pointer ml-auto"
+            >
+              Limpiar filtro de fecha
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Results List / Cards Grouped by Apartment */}
@@ -681,6 +795,11 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                       <span>{aptGroup.descripcion}</span>
                     </span>
 
+                    <span className="px-3 py-1 bg-indigo-50 text-indigo-900 font-bold text-xs rounded-xl border border-indigo-200 flex items-center space-x-1.5 shadow-2xs">
+                      <Users className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                      <span>{activeResident?.integrantesHogar || 1} {(activeResident?.integrantesHogar || 1) === 1 ? 'Persona' : 'Personas'} en Apto</span>
+                    </span>
+
                     {hasDeliveries ? (
                       <span className="px-3 py-1 bg-emerald-600 text-white font-bold text-xs rounded-full flex items-center space-x-1 shadow-sm">
                         <CheckCircle2 className="w-3.5 h-3.5" />
@@ -695,7 +814,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
 
                   {/* Active Resident Details */}
                   {activeResident && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 text-xs bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/60">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-1 text-xs bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/60">
                       <div className="flex items-center space-x-2 text-slate-800">
                         <User className="w-4 h-4 text-emerald-600 shrink-0" />
                         <div>
@@ -717,7 +836,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                               <button
                                 onClick={() => setEditingBeneficiary(activeResident)}
                                 className="p-1 hover:bg-slate-200 text-slate-500 rounded transition-colors cursor-pointer"
-                                title="Editar cédula o datos de este beneficiario"
+                                title="Editar cédula, personas o datos de este beneficiario"
                               >
                                 <Edit3 className="w-3.5 h-3.5" />
                               </button>
@@ -731,6 +850,14 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                         <div>
                           <span className="text-[10px] text-slate-400 block font-semibold uppercase">Teléfono:</span>
                           <span className="font-medium text-slate-700">{activeResident.telefono || 'Sin teléfono'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center space-x-2 text-slate-800">
+                        <Users className="w-4 h-4 text-indigo-600 shrink-0" />
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-semibold uppercase">Personas en Apto:</span>
+                          <span className="font-extrabold text-indigo-900">{activeResident.integrantesHogar || 1} {(activeResident.integrantesHogar || 1) === 1 ? 'persona' : 'personas'}</span>
                         </div>
                       </div>
 
@@ -832,7 +959,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                   </span>
                   {hasDeliveries && (
                     <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-100/80 px-2.5 py-0.5 rounded-full">
-                      Última entrega: {new Date(aptGroup.deliveries[0].fecha).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}
+                      Última entrega: {formatDisplayDateTime(aptGroup.deliveries[0].fecha)}
                     </span>
                   )}
                 </div>
@@ -861,7 +988,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                         <div className="flex items-center space-x-2 self-start sm:self-auto shrink-0">
                           <div className="flex items-center space-x-1.5 text-slate-700 font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded-md">
                             <Clock className="w-3.5 h-3.5 text-slate-500" />
-                            <span>{new Date(rec.fecha).toLocaleString('es-CO', { dateStyle: 'medium', timeStyle: 'short' })}</span>
+                            <span>{formatDisplayDateTime(rec.fecha)}</span>
                           </div>
 
                           {onDeleteDelivery && (
@@ -1000,7 +1127,12 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                         name="deliveryResident"
                         value={r.id}
                         checked={selectedResidentId === r.id}
-                        onChange={() => setSelectedResidentId(r.id)}
+                        onChange={() => {
+                          setSelectedResidentId(r.id);
+                          if (r.integrantesHogar && r.integrantesHogar > 0) {
+                            setCensusCountInput(r.integrantesHogar);
+                          }
+                        }}
                         className="w-4 h-4 text-emerald-600 focus:ring-emerald-500"
                       />
                       <span>👤 {r.nombre}</span>
@@ -1087,46 +1219,79 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
               const currentRes = selectedAptGroupForDelivery?.residents.find(r => r.id === selectedResidentId);
               const isNotCensused = selectedResidentId === 'NEW_PERSON' || !currentRes?.censoActualizado || (currentRes?.integrantesHogar || 0) === 0;
 
-              return isNotCensused ? (
-                <div className="p-3.5 bg-amber-50 border-2 border-amber-400/90 rounded-2xl shadow-sm space-y-2 animate-fadeIn">
-                  <div className="flex items-center space-x-2 text-amber-950 font-extrabold text-xs">
-                    <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
-                    <span>🚨 ALERTA: REGISTRO DE CENSO PENDIENTE DE ACTUALIZACIÓN</span>
+              return (
+                <div className={`p-3.5 rounded-2xl shadow-sm space-y-2.5 animate-fadeIn ${
+                  isNotCensused
+                    ? 'bg-amber-50 border-2 border-amber-400/90'
+                    : 'bg-emerald-50/80 border border-emerald-300'
+                }`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2 text-xs font-extrabold text-slate-900">
+                      {isNotCensused ? (
+                        <>
+                          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                          <span className="text-amber-950 font-black">👥 N° de Integrantes en el Hogar: *</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span className="text-emerald-950 font-bold">👥 Integrantes en el Hogar:</span>
+                        </>
+                      )}
+                    </div>
+                    <span className="text-xs font-mono font-black px-2 py-0.5 rounded-lg bg-white border border-slate-300 text-slate-900">
+                      {censusCountInput} personas
+                    </span>
                   </div>
-                  <p className="text-xs text-amber-900 leading-relaxed font-medium">
-                    Este hogar no tiene el censo de habitantes actualizado. Para registrar un dato real de la comunidad, consulte al habitante la cantidad exacta de personas que viven allí:
-                  </p>
-                  <div className="pt-1 flex items-center gap-3">
-                    <label className="text-xs font-extrabold text-slate-800 whitespace-nowrap">
-                      👥 N° Real de Integrantes en el Hogar: *
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="25"
-                      value={censusCountInput}
-                      onChange={e => setCensusCountInput(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-24 px-3 py-1.5 bg-white border-2 border-amber-500 font-extrabold text-amber-950 text-center rounded-xl text-sm focus:ring-2 focus:ring-amber-500"
-                    />
-                    <span className="text-xs text-amber-900 font-extrabold">personas</span>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-3 bg-emerald-50 border border-emerald-200/90 rounded-xl text-xs flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-emerald-950 font-bold">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Censo Confirmado: {currentRes?.integrantesHogar} personas en el hogar</span>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <input
-                      type="number"
-                      min="1"
-                      max="25"
-                      value={censusCountInput}
-                      onChange={e => setCensusCountInput(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-16 px-2 py-1 bg-white border border-emerald-300 font-bold text-slate-900 rounded-lg text-xs text-center"
-                    />
-                    <span className="text-[11px] text-slate-500">modificar</span>
+
+                  {/* Touch Stepper & Big Presets for Mobile */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCensusCountInput(prev => Math.max(1, prev - 1))}
+                        className="w-11 h-11 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-xl flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        -
+                      </button>
+
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        min="1"
+                        max="25"
+                        value={censusCountInput}
+                        onChange={e => setCensusCountInput(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-20 h-11 text-center bg-white border-2 border-slate-400 rounded-xl text-xl font-black text-slate-900 focus:outline-none"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setCensusCountInput(prev => Math.min(25, prev + 1))}
+                        className="w-11 h-11 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-xl flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {/* Quick 1-Tap Pills for instant selection */}
+                    <div className="flex gap-1 justify-center flex-wrap">
+                      {[1, 2, 3, 4, 5, 6, 8].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setCensusCountInput(num)}
+                          className={`w-9 h-8 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                            censusCountInput === num
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               );
@@ -1240,14 +1405,27 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                 <label className="block text-xs font-bold text-slate-700 mb-1">
                   Nombre Completo del Titular *
                 </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej. Juan Carlos Pérez"
-                  value={newNombre}
-                  onChange={e => setNewNombre(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej. Juan Carlos Pérez"
+                    value={newNombre}
+                    onFocus={e => e.target.select()}
+                    onChange={e => setNewNombre(e.target.value)}
+                    className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  />
+                  {newNombre && (
+                    <button
+                      type="button"
+                      onClick={() => setNewNombre('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                      title="Borrar nombre"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1258,7 +1436,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                   <select
                     value={newTipoDocumento}
                     onChange={e => setNewTipoDocumento(e.target.value)}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="CC">C.C. - Cédula</option>
                     <option value="TI">T.I. - T. Identidad</option>
@@ -1272,44 +1450,138 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Cédula:
                   </label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 113000000"
-                    value={newCedula}
-                    onChange={e => setNewCedula(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Ej. 113000000"
+                      value={newCedula}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setNewCedula(e.target.value)}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {newCedula && (
+                      <button
+                        type="button"
+                        onClick={() => setNewCedula('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar cédula"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
                     Teléfono:
                   </label>
-                  <input
-                    type="text"
-                    placeholder="Ej. 3150000000"
-                    value={newTelefono}
-                    onChange={e => setNewTelefono(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      placeholder="Ej. 3150000000"
+                      value={newTelefono}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setNewTelefono(e.target.value)}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {newTelefono && (
+                      <button
+                        type="button"
+                        onClick={() => setNewTelefono('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar teléfono"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Agrupación</label>
-                <select
-                  value={newAgrupacion}
-                  onChange={e => setNewAgrupacion(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900"
-                >
-                  <option value="Agrupación 1">Agrupación 1</option>
-                  <option value="Agrupación 2">Agrupación 2</option>
-                  <option value="Agrupación 3">Agrupación 3</option>
-                  <option value="Agrupación 4">Agrupación 4</option>
-                  <option value="Agrupación 5">Agrupación 5</option>
-                  <option value="Torres y Aptos">Torres y Aptos</option>
-                  <option value="Sector General">Sector General</option>
-                  <option value="Usuarios Externos">Usuarios Externos</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Agrupación</label>
+                  <select
+                    value={newAgrupacion}
+                    onChange={e => setNewAgrupacion(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  >
+                    <option value="Agrupación 1">Agrupación 1</option>
+                    <option value="Agrupación 2">Agrupación 2</option>
+                    <option value="Agrupación 3">Agrupación 3</option>
+                    <option value="Agrupación 4">Agrupación 4</option>
+                    <option value="Agrupación 5">Agrupación 5</option>
+                    <option value="Torres y Aptos">Torres y Aptos</option>
+                    <option value="Sector General">Sector General</option>
+                    <option value="Usuarios Externos">Usuarios Externos</option>
+                  </select>
+                </div>
+                <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800">
+                      👥 Personas en Apto: *
+                    </label>
+                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
+                      {newIntegrantesHogar || 1} personas
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setNewIntegrantesHogar(Math.max(1, (newIntegrantesHogar || 1) - 1))}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        -
+                      </button>
+
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={25}
+                        value={newIntegrantesHogar || ''}
+                        onFocus={e => e.target.select()}
+                        onChange={e => {
+                          const val = e.target.value === '' ? '' : parseInt(e.target.value);
+                          setNewIntegrantesHogar(val as any);
+                        }}
+                        onBlur={() => {
+                          if (!newIntegrantesHogar || newIntegrantesHogar < 1) {
+                            setNewIntegrantesHogar(1);
+                          }
+                        }}
+                        className="w-14 h-9 text-center bg-white border-2 border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setNewIntegrantesHogar(Math.min(25, (newIntegrantesHogar || 1) + 1))}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <div className="flex gap-1 overflow-x-auto">
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setNewIntegrantesHogar(num)}
+                          className={`w-7 h-9 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                            newIntegrantesHogar === num
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
@@ -1365,7 +1637,8 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                   ...editingBeneficiary,
                   sector: selectedSector,
                   agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : editingBeneficiary.agrupacion),
-                  descripcion: isExt ? 'Usuario Externo al Sector' : parsed.descripcion
+                  descripcion: isExt ? 'Usuario Externo al Sector' : parsed.descripcion,
+                  censoActualizado: true
                 };
                 if (onEditBeneficiary) {
                   onEditBeneficiary(updated);
@@ -1376,13 +1649,26 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
             >
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Nombre Completo *</label>
-                <input
-                  type="text"
-                  required
-                  value={editingBeneficiary.nombre}
-                  onChange={e => setEditingBeneficiary({ ...editingBeneficiary, nombre: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={editingBeneficiary.nombre}
+                    onFocus={e => e.target.select()}
+                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, nombre: e.target.value })}
+                    className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  />
+                  {editingBeneficiary.nombre && (
+                    <button
+                      type="button"
+                      onClick={() => setEditingBeneficiary({ ...editingBeneficiary, nombre: '' })}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                      title="Borrar nombre"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -1391,7 +1677,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                   <select
                     value={editingBeneficiary.tipoDocumento || 'CC'}
                     onChange={e => setEditingBeneficiary({ ...editingBeneficiary, tipoDocumento: e.target.value })}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="CC">C.C. - Cédula</option>
                     <option value="TI">T.I. - T. Identidad</option>
@@ -1403,14 +1689,27 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1">Número de Documento *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. 1130608151 o S/N"
-                    value={editingBeneficiary.cedula}
-                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, cedula: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 1130608151 o S/N"
+                      value={editingBeneficiary.cedula}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setEditingBeneficiary({ ...editingBeneficiary, cedula: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.cedula && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, cedula: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar documento"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -1430,7 +1729,7 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
                         descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : editingBeneficiary.direccion)
                       });
                     }}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
+                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
                   >
                     <option value="Sector 1">Sector 1</option>
                     <option value="Sector 2">Sector 2</option>
@@ -1445,33 +1744,146 @@ export const SimpleMarketDeliveryView: React.FC<SimpleMarketDeliveryViewProps> =
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Dirección / Apto *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ej. 2C15 o 4B42"
-                    value={editingBeneficiary.direccion}
-                    onChange={e => {
-                      const newDir = e.target.value;
-                      const parsed = parseAptoCode(newDir, editingBeneficiary.sector);
-                      const isExt = newDir.toLowerCase().includes('externo') || newDir.toLowerCase().includes('fuera') || (editingBeneficiary.sector || '').toLowerCase().includes('externo');
-                      setEditingBeneficiary({
-                        ...editingBeneficiary,
-                        direccion: newDir,
-                        agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : editingBeneficiary.agrupacion),
-                        descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : newDir)
-                      });
-                    }}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      required
+                      placeholder="Ej. 2C15 o 4B42"
+                      value={editingBeneficiary.direccion}
+                      onFocus={e => e.target.select()}
+                      onChange={e => {
+                        const newDir = e.target.value;
+                        const parsed = parseAptoCode(newDir, editingBeneficiary.sector);
+                        const isExt = newDir.toLowerCase().includes('externo') || newDir.toLowerCase().includes('fuera') || (editingBeneficiary.sector || '').toLowerCase().includes('externo');
+                        setEditingBeneficiary({
+                          ...editingBeneficiary,
+                          direccion: newDir,
+                          agrupacion: isExt ? 'Usuarios Externos' : (parsed.isParsed ? parsed.agrupacion : editingBeneficiary.agrupacion),
+                          descripcion: isExt ? 'Usuario Externo al Sector' : (parsed.isParsed ? parsed.descripcion : newDir)
+                        });
+                      }}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.direccion && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, direccion: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar dirección"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Teléfono Móvil</label>
-                  <input
-                    type="text"
-                    value={editingBeneficiary.telefono}
-                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, telefono: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={editingBeneficiary.telefono}
+                      onFocus={e => e.target.select()}
+                      onChange={e => setEditingBeneficiary({ ...editingBeneficiary, telefono: e.target.value })}
+                      className="w-full pl-3 pr-8 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                    />
+                    {editingBeneficiary.telefono && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary({ ...editingBeneficiary, telefono: '' })}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 rounded-full hover:bg-slate-200 cursor-pointer"
+                        title="Borrar teléfono"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Agrupación</label>
+                  <select
+                    value={editingBeneficiary.agrupacion}
+                    onChange={e => setEditingBeneficiary({ ...editingBeneficiary, agrupacion: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  >
+                    <option value="Agrupación 1">Agrupación 1</option>
+                    <option value="Agrupación 2">Agrupación 2</option>
+                    <option value="Agrupación 3">Agrupación 3</option>
+                    <option value="Agrupación 4">Agrupación 4</option>
+                    <option value="Agrupación 5">Agrupación 5</option>
+                    <option value="Torres y Aptos">Torres y Aptos</option>
+                    <option value="Sector General">Sector General</option>
+                    <option value="Usuarios Externos">Usuarios Externos</option>
+                  </select>
+                </div>
+
+                <div className="bg-slate-50 p-2.5 rounded-2xl border border-slate-200 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800">
+                      👥 Integrantes Hogar: *
+                    </label>
+                    <span className="text-xs font-extrabold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-lg border border-emerald-200">
+                      {editingBeneficiary.integrantesHogar || 1} personas
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary(prev => prev ? ({ ...prev, integrantesHogar: Math.max(1, (prev.integrantesHogar || 1) - 1) }) : null)}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        -
+                      </button>
+
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={25}
+                        value={editingBeneficiary.integrantesHogar || ''}
+                        onFocus={e => e.target.select()}
+                        onChange={e => {
+                          const val = e.target.value === '' ? '' : parseInt(e.target.value);
+                          setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: val as any });
+                        }}
+                        onBlur={() => {
+                          if (!editingBeneficiary.integrantesHogar || editingBeneficiary.integrantesHogar < 1) {
+                            setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: 1 });
+                          }
+                        }}
+                        className="w-14 h-9 text-center bg-white border-2 border-slate-300 rounded-xl text-base font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() => setEditingBeneficiary(prev => prev ? ({ ...prev, integrantesHogar: Math.min(25, (prev.integrantesHogar || 1) + 1) }) : null)}
+                        className="w-9 h-9 bg-white border-2 border-slate-300 active:scale-95 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center cursor-pointer shadow-xs"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    <div className="flex gap-1 overflow-x-auto">
+                      {[1, 2, 3, 4, 5, 6].map(num => (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setEditingBeneficiary({ ...editingBeneficiary, integrantesHogar: num })}
+                          className={`w-7 h-9 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                            editingBeneficiary.integrantesHogar === num
+                              ? 'bg-slate-900 text-white shadow-xs'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {num}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
 

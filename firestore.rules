@@ -1,17 +1,8 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Permisos para el sistema de control de ayudas humanitarias
-    match /beneficiaries/{beneficiaryId} {
-      allow read, write: if true;
-    }
-    match /inventory/{itemId} {
-      allow read, write: if true;
-    }
-    match /deliveries/{deliveryId} {
-      allow read, write: if true;
-    }
-    match /system/{docId} {
+    // Permisos completos para el sistema de control de ayudas humanitarias y entornos dev
+    match /{document=**} {
       allow read, write: if true;
     }
   }

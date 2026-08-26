@@ -20,6 +20,8 @@ export interface DeliveryRecord {
   firmaDigital?: string;
   observaciones?: string;
   estado: 'COMPLETADO' | 'CANCELADO';
+  integrantesHogar?: number;
+  censoActualizado?: boolean;
 }
 
 export interface ChildNeed {
@@ -112,6 +114,53 @@ export interface InventoryMovement {
   fecha: string;
   referencia: string;
   usuario: string;
+}
+
+export interface PersonRecord {
+  id: string;
+  nombre: string;
+  rol: 'COPROPIETARIO' | 'PROPIETARIO' | 'ARRENDATARIO' | 'HABITANTE' | 'FAMILIAR' | 'CONTACTO_EMERGENCIA';
+  cedula?: string;
+  telefono?: string;
+  email?: string;
+  observaciones?: string;
+}
+
+export interface PropertyRecord {
+  id: string; // e.g. "prop_1A11"
+  aptoCode: string; // e.g. "1A11"
+  sector: string; // "Sector 1"
+  agrupacion: string; // "Agrupación 1", "Agrupación 2", ..., "Agrupación 5"
+  torre: string; // "Torre A", "Torre B", ..., "Torre F"
+  piso: number; // 1 to 5
+  aptoNumero: number; // 1 to 4
+  
+  // Status fields explicitly requested:
+  // - "si esta habitado o desocupado"
+  // - "si esta arrendado o vive el dueño"
+  estadoHabitabilidad: 'HABITADO' | 'DESOCUPADO';
+  tipoOcupante: 'DUEÑO' | 'ARRENDADO' | 'DESOCUPADO' | 'OTRO';
+  
+  propietario: {
+    nombre: string;
+    tipoDocumento?: string;
+    cedula: string;
+    telefono: string;
+    email: string;
+    resideEnApto?: boolean;
+    direccionContacto?: string;
+  };
+  
+  arrendatario?: {
+    nombre: string;
+    cedula?: string;
+    telefono: string;
+  };
+
+  personasAdicionales?: PersonRecord[];
+
+  observaciones?: string;
+  ultimaActualizacion?: string;
 }
 
 export interface SummaryStats {

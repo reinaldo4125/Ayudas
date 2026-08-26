@@ -62,6 +62,25 @@
         "estado": { "type": "string", "description": "COMPLETADO o ANULADO" },
         "createdAt": { "type": "string", "description": "Fecha de creación" }
       }
+    },
+    "properties": {
+      "title": "Propietarios y Apartamentos",
+      "description": "Censo de propietarios y estado de ocupación de apartamentos sector 1",
+      "fields": {
+        "id": { "type": "string", "description": "Identificador único" },
+        "aptoCode": { "type": "string", "description": "Código del apartamento (ej: 1A11, 2E42)" },
+        "sector": { "type": "string", "description": "Sector residencial" },
+        "agrupacion": { "type": "string", "description": "Agrupación (Agrupación 1 a 5)" },
+        "torre": { "type": "string", "description": "Torre (Torre A a F)" },
+        "piso": { "type": "number", "description": "Piso (1 a 5)" },
+        "aptoNumero": { "type": "number", "description": "Número de apartamento en el piso (1 a 4)" },
+        "estadoHabitabilidad": { "type": "string", "description": "HABITADO o DESOCUPADO" },
+        "tipoOcupante": { "type": "string", "description": "DUEÑO, ARRENDADO, DESOCUPADO u OTRO" },
+        "propietario": { "type": "map", "description": "Datos del propietario (nombre, cédula, teléfono, email)" },
+        "arrendatario": { "type": "map", "description": "Datos del arrendatario si aplica" },
+        "observaciones": { "type": "string", "description": "Notas o estado de comunicados" },
+        "updatedAt": { "type": "string", "description": "Fecha de actualización" }
+      }
     }
   }
 }
